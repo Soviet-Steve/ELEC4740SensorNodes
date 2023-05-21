@@ -7,6 +7,6 @@
     "editor.rulers": [
     80
     ],
-    "particle.firmwareVersion": "5.3.0",
+    "particle.firmwareVersion": "5.3.2",
     "particle.targetPlatform": "argon"
 }
