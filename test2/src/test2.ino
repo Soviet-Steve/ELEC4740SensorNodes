@@ -4,11 +4,34 @@
  * Author:
  * Date:
  */
+SYSTEM_MODE(MANUAL);
 
 #include <Wire.h>
 #include "Adafruit_GFX.h"
 #include "Adafruit_SSD1306.h"
 
+BleUuid node_one_service(0xc1a8);
+
+BleCharacteristic temp_characteristic(
+    "light", 
+    BleCharacteristicProperty::NOTIFY,  // ?
+    BleUuid(0x0543),                    // illuminance
+    node_one_service
+);
+
+BleCharacteristic sound_characteristic(
+    "sound", 
+    BleCharacteristicProperty::NOTIFY,  // ?
+    BleUuid(0x27C3),                    // sound pressure (decibel) 
+    node_one_service
+); // Could not find a better UUID.
+
+BleCharacteristic movement_characteristic(
+    "Motion", 
+    BleCharacteristicProperty::NOTIFY,  // ?
+    BleUuid(0x0541),                    // Motion Sensor
+    node_one_service
+);
 
 
 #define LDR_PIN 16 // A3
@@ -16,16 +39,17 @@
 #define TEMP_PIN 17 // A2
 #define PIR_PIN 5 // D5
 
-#define FAN_PIN D2 // D2
-#define FAN_OFF 0
-#define FAN_HALF 128
-#define FAN_FULL 255
 
 #define PIXEL_COUNT 2
-#define PIXEL_PIN D2
+#define PIXEL_PIN A3
 #define PIXEL_TYPE WS2812B
 
+
+
 #define MIC_BUFFER_SIZE 512
+
+
+#define WAITTIME 20 // Relates to 50Hz
 
 Adafruit_SSD1306 display(-1);
 
@@ -35,6 +59,8 @@ int ldrValue, soundValue, temperatureValue;
 volatile uint64_t uinMovementTime = 0;
 uint64_t uinMicTime = 0;
 uint32_t aruinMicBuffer[MIC_BUFFER_SIZE];
+uint64_t uinUpdateTime = 0;
+float flTemp, flSound, flMotion;
 
 void fnvdMovementIsr();
 bool fnboCheckMovement();
@@ -43,12 +69,54 @@ float fnflRMStodBa(float flRmsInput);
 void fnvdReadADCMic();
 float fnflGetTemperaturemV();
 float fnflGetTemperatureC(float flTempmV);
+void callbackFunc(const char *event, const char *data);
+void onDataReceived(const uint8_t* data, size_t len, const BlePeerDevice& peer, void* context);
 // float fnflGetTempOneWire();
+
+
+
+
+
+
+
+
 
 void setup(){
   
+
+  pinMode(D2, OUTPUT);
+  // analogWrite(D2, 128, 4);
+  // analogWrite(A3, 65000);
+
   attachInterrupt(PIR_PIN, fnvdMovementIsr, CHANGE);
   pinMode(PIR_PIN, INPUT);
+
+  // pinMode(D2, OUTPUT);
+
+  // digitalWrite(D2, HIGH);
+  // delay(1000);
+  // digitalWrite(D2, LOW);
+
+  // // analogWrite(D0, 255);
+  // // delay(1000);
+  // // analogWrite(D0, 0);
+
+
+  BLE.on();
+
+  BLE.setDeviceName("Monke");
+  BLE.addCharacteristic(temp_characteristic);
+  temp_characteristic.setValue(flTemp);
+  temp_characteristic.onDataReceived(onDataReceived, NULL);
+  BLE.addCharacteristic(sound_characteristic);
+  sound_characteristic.setValue(flSound);
+  BLE.addCharacteristic(movement_characteristic);
+  movement_characteristic.setValue(flMotion);
+
+  BleAdvertisingData advData;
+  advData.appendServiceUUID(temp_characteristic);
+  BLE.advertise(&advData);
+
 
   // sensor.begin();
   // sensor.setResolution(11);
@@ -71,37 +139,58 @@ void setup(){
 
 // loop() runs over and over again, as quickly as it can execute.
 void loop() {
+
+  // for(int i = 0; i < 25; i++){
+  //   analogWrite(D2, i * 10, 4);
+  //   delay(1000);
+  // }
+  // for(int i = 25; i > 0; i++){
+  //   analogWrite(D2, i * 10, 4);
+  //   delay(1000);
+  // }
+
+
+  // digitalWrite(D2, HIGH);
+  // delay(1000);
+  // digitalWrite(D2, LOW);
+  // delay(1000);
+
+
   // fnvdReadADCMic();
   float flmVRms = fnflGetMicRMS(), flTempmV = fnflGetTemperaturemV();
   for(int i = 0; i < 9; i++){flTempmV += fnflGetTemperaturemV();}
   flTempmV /= 10;
+  fnflRMStodBa(flmVRms);
+  fnflGetTemperatureC(flTempmV);
+  fnboCheckMovement();
+  if(millis() - uinUpdateTime < WAITTIME){
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.println("MIC:");
+    // display.print(flmVRms);
+    // display.println(" mV");
+    display.print(flSound);
+    display.println(" dBA");
+    display.println("Temperture");
+    // display.print(flTempmV);
+    // display.println(" mV");
+    display.print(flTemp);
+    display.println(" C");
+    // display.println("1-Wire Temp");
+    // display.print(fnflGetTempOneWire());
+    // display.println(" C");
+    if(flMotion > 0){display.println("MOVEMENT DETECTED!");}
+    display.display();
 
-  display.clearDisplay();
-  display.setCursor(0, 0);
-  display.println("MIC:");
-  // display.print(flmVRms);
-  // display.println(" mV");
-  display.print(fnflRMStodBa(flmVRms));
-  display.println(" dBA");
-  display.println("Temperture");
-  // display.print(flTempmV);
-  // display.println(" mV");
-  float flTempC = fnflGetTemperatureC(flTempmV);
-  display.print(fnflGetTemperatureC(flTempmV));
-  display.println(" C");
-  // display.println("1-Wire Temp");
-  // display.print(fnflGetTempOneWire());
-  // display.println(" C");
-  if(fnboCheckMovement()){display.println("MOVEMENT DETECTED!");}
-  display.display();
+    if (BLE.connected()) {
+      // Set the values of the characteristics.
+      temp_characteristic.setValue(flTemp);
+      sound_characteristic.setValue(flSound);
+      movement_characteristic.setValue(flMotion);
+    }
+    uinUpdateTime = millis();
+  }
   
-  if (flTempC < 20.0)
-    analogWrite(FAN_PIN, FAN_OFF);
-  else if (flTempC < 24.0)
-    analogWrite(FAN_PIN, FAN_HALF);
-  else
-    analogWrite(FAN_PIN, FAN_FULL);
-
   
 }
 
@@ -114,7 +203,9 @@ void fnvdMovementIsr(){
 }
 
 bool fnboCheckMovement(){
-  return (millis() - uinMovementTime < 1000);
+  bool bMotion = (millis() - uinMovementTime < 1000);
+  flMotion = bMotion;
+  return bMotion;
 }
 
 
@@ -148,17 +239,25 @@ void fnvdReadADCMic(){
 }
 
 float fnflRMStodBa(float flRmsInput){
-  return 10.1 * logf(flRmsInput) + 26.223;
+  flSound = 10.1 * logf(flRmsInput) + 26.223;
+  return flSound;
 }
 
 float fnflGetTemperaturemV(){
+  
   return (analogRead(TEMP_PIN) * 3300 / 4096);
+  
 }
 
 
 float fnflGetTemperatureC(float flTempmV){
-  return flTempmV * 0.0445 + 13.137;
+  flTemp = flTempmV * 0.0445 + 13.137;
+  return flTemp;
   // return ((flTempmV) * 0.1) - 1.24;
+}
+
+void callbackFunc(const char *event, const char *data){
+  Log.info("Event: %s, Data: %s", event, data);
 }
 
 // float fnflGetTempOneWire(){
@@ -204,3 +303,13 @@ float fnflGetTemperatureC(float flTempmV){
   display.display();
 
 */
+
+void onDataReceived(const uint8_t* data, size_t len, const BlePeerDevice& peer, void* context) {
+    // Check the length of the incoming data. It should be 4 bytes for a uint32_t.
+    if (len == sizeof(uint32_t)) {
+        // memcpy(&receivedValue, data, sizeof(uint32_t));
+        Serial.println("Recieved");
+    } else {
+        Serial.println("Unexpected data length");
+    }
+}
