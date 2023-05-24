@@ -10,28 +10,47 @@ SYSTEM_MODE(MANUAL);
 #include "Adafruit_GFX.h"
 #include "Adafruit_SSD1306.h"
 
-BleUuid node_one_service(0xc1a8);
 
-BleCharacteristic temp_characteristic(
-    "light", 
-    BleCharacteristicProperty::NOTIFY,  // ?
-    BleUuid(0x0543),                    // illuminance
-    node_one_service
-);
 
-BleCharacteristic sound_characteristic(
-    "sound", 
-    BleCharacteristicProperty::NOTIFY,  // ?
-    BleUuid(0x27C3),                    // sound pressure (decibel) 
-    node_one_service
-); // Could not find a better UUID.
+// 6ab80ed5-ca62-43fc-b937-4c6807fac686 Node 1 Service
+// 784474ab-65a9-42ec-9a79-11e279a247c3 Node 1 Temp
+// 72219c13-077d-4f34-8978-c9fa03716c2c Node 1 Sound
+// e263ab90-26ac-47e1-bc23-3d4bcec72d5e Node 1 Movement
 
-BleCharacteristic movement_characteristic(
-    "Motion", 
-    BleCharacteristicProperty::NOTIFY,  // ?
-    BleUuid(0x0541),                    // Motion Sensor
-    node_one_service
-);
+const char* NodeOneServiceUUID = "6ab80ed5-ca62-43fc-b937-4c6807fac686";
+const char* NodeOneTempUUID = "784474ab-65a9-42ec-9a79-11e279a247c3";
+const char* NodeOneSoundUUID = "72219c13-077d-4f34-8978-c9fa03716c2c";
+const char* NodeOneMovementUUID = "e263ab90-26ac-47e1-bc23-3d4bcec72d5e";
+
+BleCharacteristic compressedSensorCharacteristic("compressed",BleCharacteristicProperty::NOTIFY, NodeOneTempUUID, NodeOneServiceUUID);
+
+// BleCharacteristic tempSensorCharacteristic("temp",BleCharacteristicProperty::NOTIFY, NodeOneTempUUID, NodeOneServiceUUID);
+// BleCharacteristic soundSensorCharacteristic("sound",BleCharacteristicProperty::NOTIFY, NodeOneSoundUUID, NodeOneServiceUUID);
+// BleCharacteristic movementSensorCharacteristic("move",BleCharacteristicProperty::NOTIFY, NodeOneMovementUUID, NodeOneServiceUUID);
+
+
+// BleUuid node_one_service(0xc1a8);
+
+// BleCharacteristic temp_characteristic(
+//     "light", 
+//     BleCharacteristicProperty::NOTIFY,  // ?
+//     BleUuid(0x0543),                    // illuminance
+//     node_one_service
+// );
+
+// BleCharacteristic sound_characteristic(
+//     "sound", 
+//     BleCharacteristicProperty::NOTIFY,  // ?
+//     BleUuid(0x27C3),                    // sound pressure (decibel) 
+//     node_one_service
+// ); // Could not find a better UUID.
+
+// BleCharacteristic movement_characteristic(
+//     "Motion", 
+//     BleCharacteristicProperty::NOTIFY,  // ?
+//     BleUuid(0x0541),                    // Motion Sensor
+//     node_one_service
+// );
 
 
 #define LDR_PIN 16 // A3
@@ -49,7 +68,7 @@ BleCharacteristic movement_characteristic(
 #define MIC_BUFFER_SIZE 512
 
 
-#define WAITTIME 20 // Relates to 50Hz
+#define WAITTIME 1000 // Relates to 1Hz
 
 Adafruit_SSD1306 display(-1);
 
@@ -60,7 +79,8 @@ volatile uint64_t uinMovementTime = 0;
 uint64_t uinMicTime = 0;
 uint32_t aruinMicBuffer[MIC_BUFFER_SIZE];
 uint64_t uinUpdateTime = 0;
-float flTemp, flSound, flMotion;
+float flTemp, flSound;
+uint8_t uinMotion;
 
 void fnvdMovementIsr();
 bool fnboCheckMovement();
@@ -85,7 +105,8 @@ void setup(){
   
 
   pinMode(D2, OUTPUT);
-  // analogWrite(D2, 128, 4);
+  // analogWrite(D2, 0, 4);
+  digitalWrite(D2, LOW);
   // analogWrite(A3, 65000);
 
   attachInterrupt(PIR_PIN, fnvdMovementIsr, CHANGE);
@@ -102,24 +123,29 @@ void setup(){
   // // analogWrite(D0, 0);
 
 
+  // BLE.on();
+
+  // BLE.setDeviceName("Monke");
+  // BLE.addCharacteristic(temp_characteristic);
+  // temp_characteristic.setValue(flTemp);
+  // temp_characteristic.onDataReceived(onDataReceived, NULL);
+  // BLE.addCharacteristic(sound_characteristic);
+  // sound_characteristic.setValue(flSound);
+  // BLE.addCharacteristic(movement_characteristic);
+  // movement_characteristic.setValue(flMotion);
+
+  // BleAdvertisingData advData;
+  // advData.appendServiceUUID(temp_characteristic);
+  // BLE.advertise(&advData);
+
   BLE.on();
-
-  BLE.setDeviceName("Monke");
-  BLE.addCharacteristic(temp_characteristic);
-  temp_characteristic.setValue(flTemp);
-  temp_characteristic.onDataReceived(onDataReceived, NULL);
-  BLE.addCharacteristic(sound_characteristic);
-  sound_characteristic.setValue(flSound);
-  BLE.addCharacteristic(movement_characteristic);
-  movement_characteristic.setValue(flMotion);
-
+  // BLE.addCharacteristic(tempSensorCharacteristic);
+  // BLE.addCharacteristic(soundSensorCharacteristic);
+  // BLE.addCharacteristic(movementSensorCharacteristic);
+  BLE.addCharacteristic(compressedSensorCharacteristic);
   BleAdvertisingData advData;
-  advData.appendServiceUUID(temp_characteristic);
+  advData.appendServiceUUID(NodeOneServiceUUID);
   BLE.advertise(&advData);
-
-
-  // sensor.begin();
-  // sensor.setResolution(11);
 
   Wire.begin();
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  // initialize with the I2C addr 0x3D (for the 128x64)
@@ -163,7 +189,35 @@ void loop() {
   fnflRMStodBa(flmVRms);
   fnflGetTemperatureC(flTempmV);
   fnboCheckMovement();
-  if(millis() - uinUpdateTime < WAITTIME){
+
+
+
+  if(millis() - uinUpdateTime > WAITTIME){
+
+    if(BLE.connected()){
+      time32_t inTime = Time.now();
+      uint8_t* pchTxBuff[sizeof(flTemp) + sizeof(flSound) + sizeof(uinMotion) + sizeof(inTime)];
+      memcpy(pchTxBuff, &flTemp, sizeof(flTemp));
+      memcpy(&pchTxBuff[sizeof(flTemp)], &flSound , sizeof(flSound));
+      memcpy(&pchTxBuff[sizeof(flTemp) + sizeof(flSound)] , &uinMotion , sizeof(uinMotion));
+      memcpy(&pchTxBuff[sizeof(flTemp) + sizeof(flSound) + sizeof(uinMotion)], &inTime , sizeof(inTime));
+      compressedSensorCharacteristic.setValue(pchTxBuff);
+      // memcpy(pchTxBuff, &flTemp, sizeof(flTemp));
+      // tempSensorCharacteristic.setValue(flTemp);
+      // memcpy(pchTxBuff, &flSound, sizeof(flSound));
+      // soundSensorCharacteristic.setValue(flSound);
+      // memcpy(pchTxBuff, &flMotion, sizeof(flMotion));wsaerft5yuiolp;
+      // movementSensorCharacteristic.setValue(flMotion);
+    }
+
+    if(flTemp > 24){
+      digitalWrite(D2, HIGH); // Fan Speed 2
+    }else if(flTemp < 20){
+      digitalWrite(D2, LOW); // Fan Off
+    }else{
+      analogWrite(D2, 128, 4); // Fan Speed 1
+    }
+
     display.clearDisplay();
     display.setCursor(0, 0);
     display.println("MIC:");
@@ -179,15 +233,15 @@ void loop() {
     // display.println("1-Wire Temp");
     // display.print(fnflGetTempOneWire());
     // display.println(" C");
-    if(flMotion > 0){display.println("MOVEMENT DETECTED!");}
+    if(uinMotion > 0){display.println("MOVEMENT DETECTED!");}
     display.display();
 
-    if (BLE.connected()) {
-      // Set the values of the characteristics.
-      temp_characteristic.setValue(flTemp);
-      sound_characteristic.setValue(flSound);
-      movement_characteristic.setValue(flMotion);
-    }
+    // if (BLE.connected()) {
+    //   // Set the values of the characteristics.
+    //   temp_characteristic.setValue(flTemp);
+    //   sound_characteristic.setValue(flSound);
+    //   movement_characteristic.setValue(flMotion);
+    // }
     uinUpdateTime = millis();
   }
   
@@ -204,7 +258,7 @@ void fnvdMovementIsr(){
 
 bool fnboCheckMovement(){
   bool bMotion = (millis() - uinMovementTime < 1000);
-  flMotion = bMotion;
+  uinMotion = bMotion;
   return bMotion;
 }
 
