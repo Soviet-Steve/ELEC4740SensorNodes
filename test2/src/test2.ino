@@ -10,24 +10,29 @@ SYSTEM_MODE(MANUAL);
 #include "Adafruit_GFX.h"
 #include "Adafruit_SSD1306.h"
 
-
+// abf8483f-4895-402f-9de9-a394f371b283 Cluster Head Service UUID
+const char* ClusterHeadServiceUUID = "abf8483f-4895-402f-9de9-a394f371b283";
 
 // 6ab80ed5-ca62-43fc-b937-4c6807fac686 Node 1 Service
 // 784474ab-65a9-42ec-9a79-11e279a247c3 Node 1 Temp
 // 72219c13-077d-4f34-8978-c9fa03716c2c Node 1 Sound
 // e263ab90-26ac-47e1-bc23-3d4bcec72d5e Node 1 Movement
-
+// 989f39f2-c1a4-41d0-abd7-5d6a00690bbd Node 1 Fan
 const char* NodeOneServiceUUID = "6ab80ed5-ca62-43fc-b937-4c6807fac686";
 const char* NodeOneTempUUID = "784474ab-65a9-42ec-9a79-11e279a247c3";
 const char* NodeOneSoundUUID = "72219c13-077d-4f34-8978-c9fa03716c2c";
 const char* NodeOneMovementUUID = "e263ab90-26ac-47e1-bc23-3d4bcec72d5e";
+const char* NodeOneFanUUID = "989f39f2-c1a4-41d0-abd7-5d6a00690bbd";
 
-BleCharacteristic compressedSensorCharacteristic("compressed",BleCharacteristicProperty::NOTIFY, NodeOneTempUUID, NodeOneServiceUUID);
+// BleCharacteristic compressedSensorCharacteristic("compressed",BleCharacteristicProperty::NOTIFY, NodeOneTempUUID, NodeOneServiceUUID);
 
-// BleCharacteristic tempSensorCharacteristic("temp",BleCharacteristicProperty::NOTIFY, NodeOneTempUUID, NodeOneServiceUUID);
-// BleCharacteristic soundSensorCharacteristic("sound",BleCharacteristicProperty::NOTIFY, NodeOneSoundUUID, NodeOneServiceUUID);
-// BleCharacteristic movementSensorCharacteristic("move",BleCharacteristicProperty::NOTIFY, NodeOneMovementUUID, NodeOneServiceUUID);
+BleCharacteristic tempSensorCharacteristic("temp",BleCharacteristicProperty::NOTIFY, NodeOneTempUUID, NodeOneServiceUUID);
+BleCharacteristic soundSensorCharacteristic("sound",BleCharacteristicProperty::NOTIFY, NodeOneSoundUUID, NodeOneServiceUUID);
+BleCharacteristic movementSensorCharacteristic("move",BleCharacteristicProperty::NOTIFY, NodeOneMovementUUID, NodeOneServiceUUID);
+BleCharacteristic fanCharacteristic;
 
+BlePeerDevice ClusterHead;
+BleScanFilter ClusterHeadFilter;
 
 // BleUuid node_one_service(0xc1a8);
 
@@ -80,7 +85,7 @@ uint64_t uinMicTime = 0;
 uint32_t aruinMicBuffer[MIC_BUFFER_SIZE];
 uint64_t uinUpdateTime = 0;
 float flTemp, flSound;
-uint8_t uinMotion;
+uint8_t uinMotion, uinFanSpeed;
 
 void fnvdMovementIsr();
 bool fnboCheckMovement();
@@ -112,6 +117,8 @@ void setup(){
   attachInterrupt(PIR_PIN, fnvdMovementIsr, CHANGE);
   pinMode(PIR_PIN, INPUT);
 
+  uinFanSpeed = 0;
+
   // pinMode(D2, OUTPUT);
 
   // digitalWrite(D2, HIGH);
@@ -139,13 +146,17 @@ void setup(){
   // BLE.advertise(&advData);
 
   BLE.on();
-  // BLE.addCharacteristic(tempSensorCharacteristic);
-  // BLE.addCharacteristic(soundSensorCharacteristic);
-  // BLE.addCharacteristic(movementSensorCharacteristic);
-  BLE.addCharacteristic(compressedSensorCharacteristic);
+  BLE.addCharacteristic(tempSensorCharacteristic);
+  BLE.addCharacteristic(soundSensorCharacteristic);
+  BLE.addCharacteristic(movementSensorCharacteristic);
+  // BLE.addCharacteristic(compressedSensorCharacteristic);
+  
   BleAdvertisingData advData;
   advData.appendServiceUUID(NodeOneServiceUUID);
   BLE.advertise(&advData);
+  fanCharacteristic.onDataReceived(onFanDataReceived, NULL);
+
+  ClusterHeadFilter.serviceUUID(NodeOneServiceUUID);
 
   Wire.begin();
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  // initialize with the I2C addr 0x3D (for the 128x64)
@@ -193,30 +204,76 @@ void loop() {
 
 
   if(millis() - uinUpdateTime > WAITTIME){
-
+    if(ClusterHead.connected()){
+      ClusterHead.getCharacteristicByUUID(fanCharacteristic, NodeOneFanUUID);
+    }
+    
     if(BLE.connected()){
-      time32_t inTime = Time.now();
-      uint8_t* pchTxBuff[sizeof(flTemp) + sizeof(flSound) + sizeof(uinMotion) + sizeof(inTime)];
-      memcpy(pchTxBuff, &flTemp, sizeof(flTemp));
-      memcpy(&pchTxBuff[sizeof(flTemp)], &flSound , sizeof(flSound));
-      memcpy(&pchTxBuff[sizeof(flTemp) + sizeof(flSound)] , &uinMotion , sizeof(uinMotion));
-      memcpy(&pchTxBuff[sizeof(flTemp) + sizeof(flSound) + sizeof(uinMotion)], &inTime , sizeof(inTime));
-      compressedSensorCharacteristic.setValue(pchTxBuff);
+      // uint8_t* pchTxBuff[sizeof(flTemp) + sizeof(flSound) + sizeof(uinMotion) + sizeof(inTime)];
       // memcpy(pchTxBuff, &flTemp, sizeof(flTemp));
-      // tempSensorCharacteristic.setValue(flTemp);
+      // memcpy(&pchTxBuff[sizeof(flTemp)], &flSound , sizeof(flSound));
+      // memcpy(&pchTxBuff[sizeof(flTemp) + sizeof(flSound)] , &uinMotion , sizeof(uinMotion));
+      // memcpy(&pchTxBuff[sizeof(flTemp) + sizeof(flSound) + sizeof(uinMotion)], &inTime , sizeof(inTime));
+      // compressedSensorCharacteristic.setValue(pchTxBuff);
+      // memcpy(pchTxBuff, &flTemp, sizeof(flTemp));
+      tempSensorCharacteristic.setValue(flTemp);
       // memcpy(pchTxBuff, &flSound, sizeof(flSound));
-      // soundSensorCharacteristic.setValue(flSound);
+      soundSensorCharacteristic.setValue(flSound);
       // memcpy(pchTxBuff, &flMotion, sizeof(flMotion));wsaerft5yuiolp;
-      // movementSensorCharacteristic.setValue(flMotion);
+      movementSensorCharacteristic.setValue(uinMotion);
+    }
+    switch (uinFanSpeed){
+    case 0:
+      digitalWrite(D2, LOW); // Fan Off
+      break;
+    case 1:
+      analogWrite(D2, 128, 4); // Fan Speed 1
+      break;
+    case 2:
+      digitalWrite(D2, HIGH); // Fan Speed 2
+      break;    
+    default:
+      break;
     }
 
-    if(flTemp > 24){
-      digitalWrite(D2, HIGH); // Fan Speed 2
-    }else if(flTemp < 20){
-      digitalWrite(D2, LOW); // Fan Off
-    }else{
-      analogWrite(D2, 128, 4); // Fan Speed 1
-    }
+
+  if(ClusterHead.connected()){
+    ClusterHead.getCharacteristicByUUID(fanCharacteristic, NodeOneFanUUID);
+  }else{
+    Vector<BleScanResult> scanResults = BLE.scanWithFilter(ClusterHeadFilter);
+    for(int i = 0; i< scanResults.size(); i++){
+      BleUuid foundService;
+      uint32_t len;
+      len = scanResults[i].advertisingData().serviceUUID(&foundService, 1);
+      if(len > 0 && foundService == NodeOneServiceUUID){
+        display.clearDisplay();
+        display.setCursor(0, 0);
+        display.println("Found a Device");
+        display.print("Address: ");
+        display.print(scanResults[i].address().toString());
+        display.display();
+        if(len > 0){
+          ClusterHead = BLE.connect(scanResults[i].address());
+          display.setCursor(0, 30);
+          if(ClusterHead.connected()){
+            display.print("Cluster Head :)");
+          }else{
+            display.print("Cluster Head :(");
+          }
+        display.display();
+        }
+        // NodeOne = BLE.connect(scanResults[i].address());
+      }
+  }
+  }
+
+    // if(flTemp > 24){
+    //   digitalWrite(D2, HIGH); // Fan Speed 2
+    // }else if(flTemp < 20){
+    //   digitalWrite(D2, LOW); // Fan Off
+    // }else{
+    //   analogWrite(D2, 128, 4); // Fan Speed 1
+    // }
 
     display.clearDisplay();
     display.setCursor(0, 0);
@@ -366,4 +423,8 @@ void onDataReceived(const uint8_t* data, size_t len, const BlePeerDevice& peer, 
     } else {
         Serial.println("Unexpected data length");
     }
+}
+
+void onFanDataReceived(const uint8_t* data, size_t len, const BlePeerDevice& peer, void* context) {
+  memcpy(&uinFanSpeed, data, 1);
 }
