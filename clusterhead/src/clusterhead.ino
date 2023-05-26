@@ -262,10 +262,16 @@ void loop() {
       case RED_1:
         // Either change the period or restart the timer at 10 s.
         sound_timer.changePeriod(10000);
+        // If we are de-escalating, then reset the timer.
+        if (sound_state == RED_2)
+          sound_timer.reset();
         break;
       case GREEN:
         // Either change the period or restart the timer at 30 s.
         sound_timer.changePeriod(30000);
+        // If we are de-escalating, then reset the timer.
+        if (sound_state == RED_1)
+          sound_timer.reset();
         break;
       default:
       case SAFE:
