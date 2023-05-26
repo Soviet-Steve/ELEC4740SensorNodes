@@ -10,11 +10,14 @@
 
 SYSTEM_MODE(MANUAL);
 
-// Swap these around if they are wrong.
-#define LED_1_R D8
-#define LED_1_G D7
-#define LED_2_R D6
-#define LED_2_G D5
+
+
+
+// abf8483f-4895-402f-9de9-a394f371b283 Cluster Head Service UUID
+// 989f39f2-c1a4-41d0-abd7-5d6a00690bbd Node 1 Fan
+const char* ClusterHeadServiceUUID = "abf8483f-4895-402f-9de9-a394f371b283";
+const char* NodeOneFanUUID = "989f39f2-c1a4-41d0-abd7-5d6a00690bbd";
+
 
 // 6ab80ed5-ca62-43fc-b937-4c6807fac686 Node 1 Service
 // 784474ab-65a9-42ec-9a79-11e279a247c3 Node 1 Temp
@@ -34,6 +37,8 @@ BleCharacteristic soundSensorCharacteristicOne;
 BleCharacteristic motionSensorCharacteristic;
 
 BleScanFilter NodeOneFilter;
+BleCharacteristic fanCharacteristic("fan",BleCharacteristicProperty::NOTIFY, NodeOneFanUUID, ClusterHeadServiceUUID);
+
 
 #define SCAN_RESULT_MAX 30
 BleScanResult scanResults[SCAN_RESULT_MAX];
@@ -41,8 +46,20 @@ BleScanResult scanResults[SCAN_RESULT_MAX];
 Adafruit_SSD1306 display(-1);
 
 float flTemp, flSound, flMovement;
+uint8_t uinMotion;
 float flLight, flSound2, flDistance;
+uint8_t uinFanState;
 
+//    ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
+//    CLAYTON'S CODE DO NOT TOUCH
+//    ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
+
+// Swap these around if they are wrong.
+#define LED_1_R D8
+#define LED_1_G D7
+#define LED_2_R D6
+#define LED_2_G D5
+    
 enum SoundState {
   SAFE,   // < 55 dBA
   GREEN,  // 55 - 70 dBA
@@ -80,7 +97,7 @@ bool movement_timer_flag = false;
 Timer led_timer_1(1000, led_timer_1_callback);
 Timer led_timer_2(1000, led_timer_2_callback);
 
-void onTempReceived(const uint8_t* data, size_t len, const BlePeerDevice& peer, void* context);
+
 
 void sound_timer_callback();
 void movement_timer_callback();
@@ -88,13 +105,22 @@ void movement_timer_callback();
 void led_timer_1_callback();
 void led_timer_2_callback();
 
+//    ↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑
+//    CLAYTON'S CODE DO NOT TOUCH
+//    ↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑
+
+void onTempReceived(const uint8_t* data, size_t len, const BlePeerDevice& peer, void* context);
+void onSoundOneReceived(const uint8_t* data, size_t len, const BlePeerDevice& peer, void* context);
+void onMotionRecieived(const uint8_t* data, size_t len, const BlePeerDevice& peer, void* context);
+
 // setup() runs once, when the device is first turned on.
 void setup() {
   flTemp = -1;
   flSound = -1;
   flMovement = -1;
+  uinFanState = 0;
 
-  NodeOneFilter.serviceUUID(NodeOneServiceUUID);
+  
   // Put initialization like pinMode and begin functions here.
   Wire.begin();
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  // initialize with the I2C addr 0x3D (for the 128x64)
@@ -109,14 +135,28 @@ void setup() {
 
   BLE.on();
 
+  NodeOneFilter.serviceUUID(NodeOneServiceUUID);
+
+  BLE.addCharacteristic(fanCharacteristic);
+
+  BleAdvertisingData advData;
+  advData.appendServiceUUID(ClusterHeadServiceUUID);
+  BLE.advertise(&advData);
+
   tempSensorCharacteristic.onDataReceived(onTempReceived, NULL);
+  soundSensorCharacteristicOne.onDataReceived(onSoundOneReceived, NULL);
+  motionSensorCharacteristic.onDataReceived(onMotionRecieived, NULL);
 }
 
 // loop() runs over and over again, as quickly as it can execute.
 void loop() {
   // The core of your code will likely live here.
   // uint32_t uinCount = BLE.scan(scanResults, SCAN_RESULT_MAX);
-  if (!BLE.connected()) {
+  if(BLE.connected()){
+    fanCharacteristic.setValue(uinFanState);
+  }
+
+  if (!NodeOne.connected()) {
     Vector<BleScanResult> scanResults = BLE.scanWithFilter(NodeOneFilter);
     for(int i = 0; i< scanResults.size(); i++){
       BleUuid foundService;
@@ -138,21 +178,37 @@ void loop() {
             display.print("Node :(");
           }
         display.display();
-
-        }
-        if(NodeOne.connected()){
-          NodeOne.getCharacteristicByUUID(tempSensorCharacteristic, NodeOneTempUUID);
-          display.clearDisplay();
-          display.setCursor(0, 0);
-          display.print("Temp: ");
-          display.print(flTemp);
-          display.display();
         }
         // NodeOne = BLE.connect(scanResults[i].address());
       }
     }
+  }else{
+    NodeOne.getCharacteristicByUUID(tempSensorCharacteristic, NodeOneTempUUID);
+    NodeOne.getCharacteristicByUUID(soundSensorCharacteristicOne, NodeOneSoundUUID);
+    NodeOne.getCharacteristicByUUID(motionSensorCharacteristic, NodeOneMovementUUID);
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.print("Temp: ");
+    display.println(flTemp);
+    display.print("Sound: ");
+    display.println(flSound);
+    display.print("Motion: ");
+    display.println(uinMotion);
+    display.display();
   }
 
+  if(flTemp > 24){
+    uinFanState = 2;
+  }else if(flTemp < 20){
+    uinFanState = 0;
+  }else{
+    uinFanState = 1;
+  }
+
+  //    ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
+  //    CLAYTON'S CODE DO NOT TOUCH
+  //    ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
+  
   // Choose the next state based on the level of sound.
   if ((flSound > 80) || (flSound2 > 80)) {
     new_sound_state = SoundState::RED_2;
@@ -303,18 +359,34 @@ void loop() {
         break;
     }
   }
+  
+  //    ↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑
+  //    CLAYTON'S CODE DO NOT TOUCH
+  //    ↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑
 
 }
 
 void onTempReceived(const uint8_t* data, size_t len, const BlePeerDevice& peer, void* context){
     memcpy(&flTemp, &data[0], sizeof(flTemp));
-    display.clearDisplay();
-    display.setCursor(0,50);
-    display.print("Raw Temp: ");
-    display.print(flTemp);
-    display.display();
+    // display.clearDisplay();
+    // display.setCursor(0,50);
+    // display.print("Raw Temp: ");
+    // display.print(flTemp);
+    // display.display();
     // tempSensorCharacteristic.getValue(&flTemp);
 }
+
+void onSoundOneReceived(const uint8_t* data, size_t len, const BlePeerDevice& peer, void* context){
+  memcpy(&flSound, &data[0], sizeof(flTemp));
+}
+
+void onMotionRecieived(const uint8_t* data, size_t len, const BlePeerDevice& peer, void* context){
+  memcpy(&uinMotion, &data[0], sizeof(uinMotion));
+}
+
+//    ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
+//    CLAYTON'S CODE DO NOT TOUCH
+//    ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
 
 void sound_timer_callback() {
   sound_timer_flag = true;
@@ -339,3 +411,7 @@ void led_timer_2_callback() {
   on_state ^= 1;
   led_timer_2.reset();
 }
+
+//    ↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑
+//    CLAYTON'S CODE DO NOT TOUCH
+//    ↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑

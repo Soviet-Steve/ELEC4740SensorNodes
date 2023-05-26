@@ -27,6 +27,7 @@ const char* NodeOneFanUUID = "989f39f2-c1a4-41d0-abd7-5d6a00690bbd";
 // BleCharacteristic compressedSensorCharacteristic("compressed",BleCharacteristicProperty::NOTIFY, NodeOneTempUUID, NodeOneServiceUUID);
 
 BleCharacteristic tempSensorCharacteristic("temp",BleCharacteristicProperty::NOTIFY, NodeOneTempUUID, NodeOneServiceUUID);
+// BleCharacteristic tempSensorCharacteristic("temp",BleCharacteristicProperty::NOTIFY, BleUuid(0x2A1C), NodeOneServiceUUID);
 BleCharacteristic soundSensorCharacteristic("sound",BleCharacteristicProperty::NOTIFY, NodeOneSoundUUID, NodeOneServiceUUID);
 BleCharacteristic movementSensorCharacteristic("move",BleCharacteristicProperty::NOTIFY, NodeOneMovementUUID, NodeOneServiceUUID);
 BleCharacteristic fanCharacteristic;
@@ -34,50 +35,17 @@ BleCharacteristic fanCharacteristic;
 BlePeerDevice ClusterHead;
 BleScanFilter ClusterHeadFilter;
 
-// BleUuid node_one_service(0xc1a8);
-
-// BleCharacteristic temp_characteristic(
-//     "light", 
-//     BleCharacteristicProperty::NOTIFY,  // ?
-//     BleUuid(0x0543),                    // illuminance
-//     node_one_service
-// );
-
-// BleCharacteristic sound_characteristic(
-//     "sound", 
-//     BleCharacteristicProperty::NOTIFY,  // ?
-//     BleUuid(0x27C3),                    // sound pressure (decibel) 
-//     node_one_service
-// ); // Could not find a better UUID.
-
-// BleCharacteristic movement_characteristic(
-//     "Motion", 
-//     BleCharacteristicProperty::NOTIFY,  // ?
-//     BleUuid(0x0541),                    // Motion Sensor
-//     node_one_service
-// );
-
 
 #define LDR_PIN 16 // A3
 #define SOUND_PIN 19 // A0
 #define TEMP_PIN 17 // A2
 #define PIR_PIN 5 // D5
 
-
-#define PIXEL_COUNT 2
-#define PIXEL_PIN A3
-#define PIXEL_TYPE WS2812B
-
-
-
 #define MIC_BUFFER_SIZE 512
-
 
 #define WAITTIME 1000 // Relates to 1Hz
 
 Adafruit_SSD1306 display(-1);
-
-
 
 int ldrValue, soundValue, temperatureValue;
 volatile uint64_t uinMovementTime = 0;
@@ -97,12 +65,7 @@ float fnflGetTemperatureC(float flTempmV);
 void callbackFunc(const char *event, const char *data);
 void onDataReceived(const uint8_t* data, size_t len, const BlePeerDevice& peer, void* context);
 // float fnflGetTempOneWire();
-
-
-
-
-
-
+uint32_t ieee11073_from_float(float temperature);
 
 
 
@@ -156,7 +119,7 @@ void setup(){
   BLE.advertise(&advData);
   fanCharacteristic.onDataReceived(onFanDataReceived, NULL);
 
-  ClusterHeadFilter.serviceUUID(NodeOneServiceUUID);
+  ClusterHeadFilter.serviceUUID(ClusterHeadServiceUUID);
 
   Wire.begin();
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  // initialize with the I2C addr 0x3D (for the 128x64)
@@ -239,7 +202,25 @@ void loop() {
 
   if(ClusterHead.connected()){
     ClusterHead.getCharacteristicByUUID(fanCharacteristic, NodeOneFanUUID);
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.println("MIC:");
+    display.print(flSound);
+    display.println(" dBA");
+    display.println("Temperture");
+    display.print(flTemp);
+    display.println(" C");
+    if(uinMotion > 0){display.println("MOVEMENT DETECTED!");}
+    display.print("Fan Speed: ");
+    display.println(uinFanSpeed);
+    display.display();
   }else{
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.println("Cluster Head");
+    display.println("Not Connected");
+    display.display();
+
     Vector<BleScanResult> scanResults = BLE.scanWithFilter(ClusterHeadFilter);
     for(int i = 0; i< scanResults.size(); i++){
       BleUuid foundService;
@@ -249,7 +230,7 @@ void loop() {
         display.clearDisplay();
         display.setCursor(0, 0);
         display.println("Found a Device");
-        display.print("Address: ");
+        display.println("Address: ");
         display.print(scanResults[i].address().toString());
         display.display();
         if(len > 0){
@@ -267,38 +248,6 @@ void loop() {
   }
   }
 
-    // if(flTemp > 24){
-    //   digitalWrite(D2, HIGH); // Fan Speed 2
-    // }else if(flTemp < 20){
-    //   digitalWrite(D2, LOW); // Fan Off
-    // }else{
-    //   analogWrite(D2, 128, 4); // Fan Speed 1
-    // }
-
-    display.clearDisplay();
-    display.setCursor(0, 0);
-    display.println("MIC:");
-    // display.print(flmVRms);
-    // display.println(" mV");
-    display.print(flSound);
-    display.println(" dBA");
-    display.println("Temperture");
-    // display.print(flTempmV);
-    // display.println(" mV");
-    display.print(flTemp);
-    display.println(" C");
-    // display.println("1-Wire Temp");
-    // display.print(fnflGetTempOneWire());
-    // display.println(" C");
-    if(uinMotion > 0){display.println("MOVEMENT DETECTED!");}
-    display.display();
-
-    // if (BLE.connected()) {
-    //   // Set the values of the characteristics.
-    //   temp_characteristic.setValue(flTemp);
-    //   sound_characteristic.setValue(flSound);
-    //   movement_characteristic.setValue(flMotion);
-    // }
     uinUpdateTime = millis();
   }
   
@@ -369,6 +318,17 @@ float fnflGetTemperatureC(float flTempmV){
 
 void callbackFunc(const char *event, const char *data){
   Log.info("Event: %s, Data: %s", event, data);
+}
+
+
+uint32_t ieee11073_from_float(float temperature){
+	// This code is from the ARM mbed temperature demo:
+	// https://github.com/ARMmbed/ble/blob/master/ble/services/HealthThermometerService.h
+	// I'm pretty sure this only works for positive values of temperature, but that's OK for the health thermometer.
+	uint8_t exponent = 0xFE; // Exponent is -2
+	uint32_t mantissa = (uint32_t)(temperature * 100);
+
+	return (((uint32_t)exponent) << 24) | mantissa;
 }
 
 // float fnflGetTempOneWire(){
